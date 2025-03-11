@@ -5,9 +5,9 @@ Created on Mon Jul 18 15:58:15 2022
 @author: Steve
 """
 
-# import necessary packages
 from sklearn.preprocessing import MinMaxScaler
 import pandas as pd
+import math
 import numpy as np
 import random
 import os
@@ -22,54 +22,64 @@ from keras.callbacks import EarlyStopping
 from keras.callbacks import ModelCheckpoint
 from keras.optimizers import adam_v2
 from keras.layers import BatchNormalization
-os.chdir(os.path.dirname(__file__))
+#%%
+remain_index=pd.read_csv("D:/lab/research/pm25_3days_output/github/dataset/remain_index.csv")
+simulate_input=pd.read_csv("D:/lab/research/pm25_3days_output/github/dataset/AS_simulate_input.csv")
+real_output=pd.read_csv("D:/lab/research/pm25_3days_output/github/dataset/EPA_output.csv")
+complete_data=pd.read_csv("D:/lab/research/pm25_3days_output/github/dataset/complete_data(for_convo_use)).txt")
+find_all_index=pd.read_csv("D:/lab/research/pm25_3days_output/github/dataset/find_all_index.csv").iloc[:,1]
 
-#%% read data
-remain_index=pd.read_csv("dataset/remain_index.csv",header=0,index_col=0)
-simulate_input=pd.read_csv("dataset/AS_simulate_input.csv")
-real_output=pd.read_csv("dataset/EPA_output.csv",encoding='big5')
-complete_data=pd.read_csv("dataset/complete_data(for_convo_use)).txt")
-find_all_index=pd.read_csv("dataset/find_all_index.csv",header=0,index_col=0)
+#%%
+""" data interpolation """
 
-#%% data preprocessing
-from preprocessing import interpolate
-simulate_input_= interpolate(simulate_input.iloc[:,3:])
+os.chdir(r"D:\lab\research\research_use_function")
+from preprocessing import preprocessing
+preprocessing_module1=preprocessing(simulate_input.iloc[:,3:])
+simulate_input_=preprocessing_module1.interpolate(remove_negative=True)
 simulate_input.iloc[:,3:]=simulate_input_
 
-complete_data_=interpolate(complete_data.iloc[:,4:])
+preprocessing_module2=preprocessing(complete_data.iloc[:,4:])
+complete_data_=preprocessing_module2.interpolate(remove_negative=True)
 complete_data.iloc[:,4:]=complete_data_
 
-#%% data normalization 
+#%%
+""" data normalization """
+
 #scaler
 scaler = MinMaxScaler().fit(complete_data.iloc[:,4:])
-scaler_2 = MinMaxScaler().fit(simulate_input.iloc[remain_index.iloc[:,0],3:])
+scaler_2 = MinMaxScaler().fit(simulate_input.iloc[remain_index.iloc[:,1],3:])
 scaler_3 = MinMaxScaler().fit(real_output.iloc[:,3:])
 #transform data
 epa_data_norm =scaler.transform(complete_data.iloc[:,4:])
-stimulate_input_norm = scaler_2.fit_transform(simulate_input.iloc[remain_index.iloc[:,0],3:])
+stimulate_input_norm = scaler_2.fit_transform(simulate_input.iloc[remain_index.iloc[:,1],3:])
 real_output_norm = scaler_3.fit_transform(real_output.iloc[:,3:])
 
-#%% select specific dataset as model input 
+#%%
+""" select specific dataset as model input """
 
-# Efficient NumPy-based computation
-convo_input = np.array([
-    complete_data.iloc[idx[0] - 23: idx[0] + 1, 4:].values.astype(float)
-    for idx in find_all_index.values
-])
+# select specific dataset
+convo_input=([[]*1 for i in range(0,len(find_all_index))])
+for i in range(0,len(find_all_index)):
+    for j in range(-23,1):
+        convo_input[i].append(np.asarray(complete_data.iloc[find_all_index.iloc[i]+j,4:]))
 
-# Convert all elements of convo_input to float
-convo_input = convo_input.astype(float)
+for i in range(0,len(convo_input)):
+    for j in range(0,len(convo_input[i])):
+        for k in range(0,len(convo_input[i][j])):
+            convo_input[i][j][k]=float(convo_input[i][j][k])
 
 # remove error dataset
 input_info=(simulate_input.iloc[remain_index.iloc[:,1],1:3]).reset_index(drop=True)
-input_one=np.asarray(simulate_input.iloc[remain_index.iloc[:,0],3:])
-model_output=np.asarray(real_output.iloc[remain_index.iloc[:,0],4:])
+input_one=np.asarray(simulate_input.iloc[remain_index.iloc[:,1],3:])
+model_output=np.asarray(real_output.iloc[remain_index.iloc[:,1],4:])
 
 input_two=[]
 for i in range(0,len(remain_index)):
-    input_two.append(convo_input[remain_index.iloc[i,0]])
+    input_two.append(convo_input[remain_index.iloc[i,1]])
 
-#%% Data shuffling 
+#%%
+""" Data shuffling """
+
 def generate_random_list(list_length):
     random_list=list(range(0,list_length))
     random.shuffle(random_list)
@@ -94,12 +104,13 @@ testing_random_input_two=np.asarray(random_input_two[int(len(random_input_one)*0
 testing_random_input_two=testing_random_input_two[:,0,:,:]
 testing_random_output=np.asarray(random_output[int(len(random_output)*0.8):,:])
             
-#%% Build MCNN-BP 
+#%%
+""" Build MCNN-BP """
+
 K.clear_session() 
-inputs1 = Input(shape=(73,))
 inputs2 = Input(shape=(24,8))
 
-output= Lambda(lambda x: tf.expand_dims(x, -1))(inputs1)
+output= Lambda(lambda x: tf.expand_dims(x, -1))(inputs2)
 output=Convolution1D(filters=36,kernel_size=3,input_shape=(73,1),padding='same')(output)
 output=BatchNormalization()(output)
 output=Activation('relu')(output) 
@@ -108,31 +119,24 @@ output=BatchNormalization()(output)
 output=Activation('relu')(output) 
 output=Flatten()(output)
 
-output2=Convolution1D(filters=24,kernel_size=3,input_shape=(24,8),padding='same')(inputs2)
-output2=BatchNormalization()(output2)
-output2=Activation('relu')(output2) 
-output2=Convolution1D(filters=24,kernel_size=3,padding='same')(output2)
-output2=BatchNormalization()(output2)
-output2=Activation('relu')(output2) 
-output2=Flatten()(output2)
-
-merge_output=concatenate([output,output2],axis=-1) 
-final_output=Dense(36)(merge_output)     
+final_output=Dense(36)(output)     
 final_output=Activation('relu')(final_output) 
 final_output=Dense(72)(final_output)
 
-model = Model(inputs=[inputs1,inputs2], outputs=final_output)
+model = Model(inputs=inputs2, outputs=final_output)
 learning_rate=1e-3
 adam = adam_v2.Adam(lr=learning_rate)
 model.compile(optimizer=adam,loss="mae")
 earlystopper = EarlyStopping(monitor='val_loss', patience=32, verbose=0)        
-save_path="D:/lab/research/pm25_3days_output/github/mcnn-bp.hdf5"
+save_path="D:/lab/research/pm25_3days_output/github/cnn-bp.hdf5"
 checkpoint =ModelCheckpoint(save_path,save_best_only=True)
 callback_list=[earlystopper,checkpoint]        
 
-model.fit([training_random_input_one,training_random_input_two], training_random_output, epochs=50, batch_size=64,validation_split=0.1,callbacks=callback_list)
+model.fit(training_random_input_two, training_random_output, epochs=50, batch_size=64,validation_split=0.1,callbacks=callback_list)
 
-#%% observe convolution layer output's feature (if needed)
+#%%
+""" observe convolution layer output's feature """
+
 get_1st_layer_output=K.function([model.layers[0].input],[model.layers[7].output])
 layer_output = get_1st_layer_output([testing_random_input_one])[0]
 layer_output = np.squeeze(layer_output)
@@ -147,7 +151,7 @@ get_2nd_layer_output_2=K.function([model.layers[2].input],[model.layers[14].outp
 layer_2_output_2 = get_2nd_layer_output_2([testing_random_input_two])[0]  
 layer_2_output_2 = np.squeeze(layer_2_output_2)
 
-writer = pd.ExcelWriter('result/feature_extraction_result(training).xlsx', engine='xlsxwriter')
+writer = pd.ExcelWriter('D:/lab/research/pm25_3days_output/github/feature_extraction_result(training).xlsx', engine='xlsxwriter')
 pd.DataFrame(layer_output.mean(axis=2)).to_excel(writer,sheet_name="1stlayer_input_one")
 pd.DataFrame(layer_output_2.mean(axis=2)).to_excel(writer,sheet_name="1stlayer_input_two")
 pd.DataFrame(layer_2_output.mean(axis=2)).to_excel(writer,sheet_name="2ndlayer_input_one")
@@ -155,17 +159,21 @@ pd.DataFrame(layer_2_output_2.mean(axis=2)).to_excel(writer,sheet_name="2ndlayer
 pd.DataFrame(testing_random_output).to_excel(writer,sheet_name="observe_dataset")
 writer.save()
 
-#%% Model forecasting 
+#%%
+""" Model forecasting """
 
 #load model
 model=load_model(save_path, custom_objects={'tf': tf}) 
 
 #model predict
-pred_train=(model.predict([training_random_input_one,training_random_input_two],batch_size=64))
-pred_test=(model.predict([testing_random_input_one,testing_random_input_two],batch_size=64))
+pred_train=(model.predict(training_random_input_two,batch_size=64))
+pred_test=(model.predict(testing_random_input_two,batch_size=64))
 
-#%% Model Performances 
+#%%
+""" Model Performances """
+
 #calculate R2 and save into excel
+os.chdir(r"D:\lab\research\research_use_function")
 from error_indicator import error_indicator
 training_R2=[];testing_R2=[]
 training_RMSE=[];testing_RMSE=[]
@@ -186,7 +194,7 @@ testing_RMSE=pd.DataFrame(testing_RMSE)
 training_mape=pd.DataFrame(training_mape)
 testing_mape=pd.DataFrame(testing_mape)   
 
-writer = pd.ExcelWriter('result/performance(mcnn-bp).xlsx', engine='xlsxwriter')
+writer = pd.ExcelWriter('D:/lab/research/pm25_3days_output/github/performance(cnn-bp).xlsx', engine='xlsxwriter')
 training_R2.to_excel(writer,sheet_name="training-R2")
 testing_R2.to_excel(writer,sheet_name="testing-R2")
 training_RMSE.to_excel(writer,sheet_name="training-RMSE")
@@ -212,7 +220,8 @@ final_real_output.to_excel(writer,sheet_name="realoutput")
 # Close the Pandas Excel writer and output the Excel file.
 writer.save()
 
-#%% Model forecasting (additional dataset) 
+#%%
+""" Model forecasting (additional dataset) """
 
 #hybrid model forecasting
 model=load_model(save_path, custom_objects={'tf': tf}) 
@@ -227,11 +236,15 @@ for i in range(0,63074-len(random_list)):
 testing_input_two=np.asarray(testing_input_two).astype('float64')
 
 #shuffled
-pred_test=(model.predict([testing_input_one,testing_input_two],batch_size=64))
+pred_test=(model.predict(testing_input_two,batch_size=64))
 
-#%% Model Performances (additional dataset) 
+#%%
+""" Model Performances (additional dataset) """
 
 #calculate R2 and save into excel
+
+os.chdir(r"D:\lab\research\research_use_function")
+from error_indicator import error_indicator
 testing_R2=[];testing_RMSE=[];testing_mape=[]
 #shuffled
 for i in range(0,72):
@@ -243,7 +256,7 @@ testing_R2=pd.DataFrame(testing_R2)
 testing_RMSE=pd.DataFrame(testing_RMSE)   
 testing_mape=pd.DataFrame(testing_mape)   
 
-writer = pd.ExcelWriter('result/testing_performance(mcnn-bp).xlsx', engine='xlsxwriter')
+writer = pd.ExcelWriter('D:/lab/research/pm25_3days_output/github/testing_performance(cnn-bp).xlsx', engine='xlsxwriter')
 testing_R2.to_excel(writer,sheet_name="testing-R2")
 testing_RMSE.to_excel(writer,sheet_name="testing-RMSE")
 testing_mape.to_excel(writer,sheet_name="testing-mape")
